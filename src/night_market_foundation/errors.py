@@ -33,3 +33,9 @@ class ConflictError(DomainError):
 
     code = "conflict"
     status = 409
+
+
+class SequenceForkError(ConflictError):
+    """离线终端同一序号补传了不同内容，形成序列分叉。"""
+
+    code = "sequence_fork"

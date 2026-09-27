@@ -54,6 +54,18 @@ class DomainService:
         if actor.role not in roles:
             raise PermissionDenied("当前角色不能执行该动作")
 
+    def authenticate(self, connection, actor_id: str) -> Actor:
+        """在既有事务内校验操作者存在且处于启用状态，供业务模块复用。"""
+
+        return self._actor(connection, actor_id)
+
+    def idempotent(self, connection, *, request_id: str, action: str,
+                   payload: dict[str, Any], create: Callable[[], tuple[str, str, dict[str, Any]]]) -> WriteReceipt:
+        """在既有事务内执行幂等写入，供业务模块复用。"""
+
+        return self._idempotent(connection, request_id=request_id, action=action,
+                                payload=payload, create=create)
+
     def _idempotent(self, connection, *, request_id: str, action: str,
                     payload: dict[str, Any], create: Callable[[], tuple[str, str, dict[str, Any]]]) -> WriteReceipt:
         request_id = self._identifier(request_id, "request_id")

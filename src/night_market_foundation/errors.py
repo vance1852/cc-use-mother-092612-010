@@ -33,3 +33,15 @@ class ConflictError(DomainError):
 
     code = "conflict"
     status = 409
+
+
+class SequenceForkError(ConflictError):
+    """离线终端在同一序号上传了不同内容，发生序列分叉。"""
+
+    code = "sequence_fork"
+
+
+class MarketClosedError(ConflictError):
+    """站点已经闭市，普通数量追加通道关闭，须走争议决定。"""
+
+    code = "market_closed"

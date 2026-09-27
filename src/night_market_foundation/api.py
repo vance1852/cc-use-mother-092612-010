@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .errors import DomainError, ValidationError
 from .service import DomainService
+from .settlement_service import SettlementService
 from .storage import Database
 
 
@@ -20,7 +21,9 @@ def route(service: DomainService, method: str, path: str, body: dict[str, Any] |
     headers = headers or {}
     body = body or {}
     parsed = urlparse(path)
+    query = parse_qs(parsed.query)
     actor_id = headers.get("X-Actor-Id", "")
+    settlement = service if isinstance(service, SettlementService) else None
     try:
         if method == "GET" and parsed.path == "/health":
             valid, count = service.verify_audit()
@@ -38,16 +41,68 @@ def route(service: DomainService, method: str, path: str, body: dict[str, Any] |
             receipt = service.record_domain_data(actor_id=actor_id, **body)
             return 200 if receipt.replayed else 201, receipt.__dict__
         if method == "GET" and parsed.path == "/domain-records":
-            query = parse_qs(parsed.query)
             site_id = query.get("site_id", [""])[0]
             if not site_id:
                 raise ValidationError("site_id 不能为空")
             category = query.get("category", [None])[0]
             return 200, {"items": [item.__dict__ for item in service.list_domain_data(site_id, category)]}
         if method == "GET" and parsed.path == "/audit-events":
-            query = parse_qs(parsed.query)
             after = int(query.get("after_sequence", ["0"])[0])
             return 200, {"items": service.audit_events(after)}
+        if settlement is None:
+            return 404, {"error": "route_not_found", "message": "接口不存在"}
+
+        def q(name: str, default: str = "") -> str:
+            return query.get(name, [default])[0]
+
+        if method == "POST" and parsed.path == "/party-grants":
+            result = settlement.register_party_grant(actor_id=actor_id, **body)
+            return 200 if result.get("replayed") else 201, result
+        if method == "POST" and parsed.path == "/intakes":
+            result = settlement.confirm_intake(actor_id=actor_id, **body)
+            return 200 if result.get("replayed") else 201, result
+        if method == "POST" and parsed.path == "/quantity-events":
+            result = settlement.append_quantity_event(actor_id=actor_id, **body)
+            return 200 if result.get("replayed") else 201, result
+        if method == "GET" and parsed.path == "/batch-events":
+            return 200, {"items": settlement.list_batch_events(
+                actor_id=actor_id, batch_id=q("batch_id"))}
+        if method == "POST" and parsed.path == "/transfers":
+            result = settlement.propose_transfer(actor_id=actor_id, **body)
+            return 200 if result.get("replayed") else 201, result
+        if method == "POST" and parsed.path == "/transfers/acknowledge":
+            result = settlement.acknowledge_transfer(actor_id=actor_id, **body)
+            return 200 if result.get("replayed") else 201, result
+        if method == "POST" and parsed.path == "/transfers/cancel":
+            result = settlement.cancel_transfer(actor_id=actor_id, **body)
+            return 200 if result.get("replayed") else 201, result
+        if method == "GET" and parsed.path == "/transfers":
+            return 200, settlement.get_transfer(actor_id=actor_id, transfer_id=q("transfer_id"))
+        if method == "POST" and parsed.path == "/sites/close":
+            result = settlement.close_site(actor_id=actor_id, **body)
+            return 200 if result.get("replayed") else 201, result
+        if method == "POST" and parsed.path == "/settlements":
+            result = settlement.create_settlement(actor_id=actor_id, **body)
+            return 200 if result.get("replayed") else 201, result
+        if method == "GET" and parsed.path == "/settlements":
+            return 200, settlement.get_settlement(
+                actor_id=actor_id, settlement_id=q("settlement_id"))
+        if method == "POST" and parsed.path == "/settlements/confirm":
+            result = settlement.confirm_settlement(actor_id=actor_id, **body)
+            return 200 if result.get("replayed") else 201, result
+        if method == "GET" and parsed.path == "/payment-list":
+            return 200, settlement.payment_list(
+                actor_id=actor_id, settlement_id=q("settlement_id"))
+        if method == "POST" and parsed.path == "/disputes":
+            result = settlement.raise_dispute(actor_id=actor_id, **body)
+            return 200 if result.get("replayed") else 201, result
+        if method == "POST" and parsed.path == "/disputes/decide":
+            result = settlement.decide_dispute(actor_id=actor_id, **body)
+            return 200 if result.get("replayed") else 201, result
+        if method == "GET" and parsed.path == "/disputes":
+            status = query.get("status", [None])[0]
+            return 200, {"items": settlement.list_disputes(
+                actor_id=actor_id, site_id=q("site_id"), status=status)}
         return 404, {"error": "route_not_found", "message": "接口不存在"}
     except DomainError as exc:
         return exc.status, {"error": exc.code, "message": str(exc)}
@@ -99,7 +154,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
     database = Database(args.database)
-    Handler.service = DomainService(database)
+    Handler.service = SettlementService(database)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     try:
         server.serve_forever()
